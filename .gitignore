@@ -1,0 +1,14 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Databases and runtime data
+data/*.sqlite
+data/*.sqlite-journal
+
+# Compiled BPF bytecode
+bpf/*.bpf.o
+
+# Build artifacts
+dist/
+build/
