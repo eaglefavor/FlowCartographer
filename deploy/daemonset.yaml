@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flowcartographer-agent
+  namespace: flowcartographer
+  labels:
+    app.kubernetes.io/name: flowcartographer-agent
+    app.kubernetes.io/part-of: flowcartographer
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flowcartographer-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flowcartographer-agent
+    spec:
+      hostNetwork: true
+      hostPID: true
+      serviceAccountName: flowcartographer-agent
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: flowcartographer/agent:v1.0.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: false
+            capabilities:
+              add:
+                - BPF
+                - NET_ADMIN
+                - PERFMON
+                - SYS_PTRACE
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: AGGREGATOR_ENDPOINT
+              value: "http://flowcartographer-aggregator.flowcartographer.svc.cluster.local:8080/api/v1/events"
+            - name: BATCH_SIZE
+              value: "500"
+            - name: BATCH_INTERVAL_MS
+              value: "500"
+          resources:
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+            requests:
+              cpu: "20m"
+              memory: "32Mi"
+          volumeMounts:
+            - name: sys-fs-bpf
+              mountPath: /sys/fs/bpf
+              mountPropagation: HostToContainer
+            - name: debugfs
+              mountPath: /sys/kernel/debug
+              readOnly: true
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+      volumes:
+        - name: sys-fs-bpf
+          hostPath:
+            path: /sys/fs/bpf
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+        - name: proc
+          hostPath:
+            path: /proc

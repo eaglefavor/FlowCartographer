@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowCartographer — eBPF Service Map Generator</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10" stroke-opacity="0.3"/>
+          <circle cx="12" cy="12" r="6" stroke-opacity="0.6"/>
+          <circle cx="12" cy="12" r="2" fill="currentColor"/>
+          <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke-linecap="round"/>
+        </svg>
+        <div class="logo-text">
+          <span class="logo-title">FlowCartographer</span>
+          <span class="logo-subtitle">eBPF Kernel Service Map</span>
+        </div>
+      </div>
+      <div class="status-indicator">
+        <span class="pulse-dot"></span>
+        <span class="status-label" id="streamStatus">LIVE • SSE KERNEL STREAM</span>
+      </div>
+    </div>
+
+    <!-- Cluster Golden Signals Summary -->
+    <div class="header-stats">
+      <div class="stat-box">
+        <div class="stat-value" id="statNodes">0</div>
+        <div class="stat-label">Services</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statEdges">0</div>
+        <div class="stat-label">Active Flows</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statRps">0 req/s</div>
+        <div class="stat-label">Throughput</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statLatency">0.0 ms</div>
+        <div class="stat-label">Avg P95 RTT</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value status-badge-ok" id="statHealth">HEALTHY</div>
+        <div class="stat-label">Cluster Status</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Control Toolbar -->
+  <nav class="toolbar">
+    <div class="toolbar-group">
+      <label for="namespaceFilter">Namespace:</label>
+      <select id="namespaceFilter" class="select-input">
+        <option value="all">All Namespaces</option>
+        <option value="default">default</option>
+        <option value="ingress">ingress</option>
+        <option value="platform">platform</option>
+        <option value="storage">storage</option>
+        <option value="external">external</option>
+      </select>
+    </div>
+
+    <div class="toolbar-group">
+      <label for="protocolFilter">Protocol:</label>
+      <select id="protocolFilter" class="select-input">
+        <option value="all">All Protocols</option>
+        <option value="HTTP">HTTP / REST</option>
+        <option value="gRPC">gRPC / HTTP2</option>
+        <option value="DATABASE">PostgreSQL</option>
+        <option value="REDIS">Redis</option>
+        <option value="KAFKA">Apache Kafka</option>
+        <option value="HTTPS">HTTPS / TLS</option>
+      </select>
+    </div>
+
+    <div class="toolbar-group">
+      <label for="layoutMode">Layout:</label>
+      <select id="layoutMode" class="select-input">
+        <option value="force">Force-Directed</option>
+        <option value="tier">Architectural Tiers</option>
+      </select>
+    </div>
+
+    <div class="toolbar-group search-box">
+      <input type="text" id="serviceSearch" placeholder="Search service or pod..." class="text-input" />
+    </div>
+
+    <div class="toolbar-actions">
+      <button id="btnAnomaly" class="btn btn-warning" title="Simulate payment gateway degradation to evaluate blast radius">
+        <span class="btn-icon">⚡</span>
+        <span id="anomalyBtnText">Inject Outage Anomaly</span>
+      </button>
+
+      <button id="btnToggleSim" class="btn btn-secondary" title="Pause or resume live synthetic network traffic">
+        <span class="btn-icon">⏯</span>
+        <span id="simToggleText">Pause Traffic</span>
+      </button>
+
+      <button id="btnResetView" class="btn btn-ghost" title="Reset zoom and center graph">
+        <span class="btn-icon">🎯</span> Center View
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Viewport Area -->
+  <main class="viewport-container" id="viewport">
+    <canvas id="particleCanvas"></canvas>
+    <svg id="graphSvg">
+      <defs>
+        <!-- Arrowhead Markers -->
+        <marker id="arrow-normal" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8"/>
+        </marker>
+        <marker id="arrow-failing" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ef4444"/>
+        </marker>
+        <marker id="arrow-blast" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#f43f5e"/>
+        </marker>
+        <!-- Gradients -->
+        <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="nodeGlowDanger" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#ef4444" stop-opacity="0.5"/>
+          <stop offset="100%" stop-color="#ef4444" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- Visual Namespace Group Backdrops -->
+      <g id="namespaceHullsLayer"></g>
+      <!-- Edges Layer -->
+      <g id="edgesLayer"></g>
+      <!-- Nodes Layer -->
+      <g id="nodesLayer"></g>
+    </svg>
+
+    <!-- Canvas Navigation Controls -->
+    <div class="nav-overlay">
+      <button id="zoomIn" class="nav-btn" title="Zoom In">+</button>
+      <button id="zoomOut" class="nav-btn" title="Zoom Out">−</button>
+    </div>
+
+    <!-- Legend Overlay -->
+    <div class="legend-panel">
+      <div class="legend-title">eBPF Telemetry Legend</div>
+      <div class="legend-items">
+        <div class="legend-item"><span class="legend-badge type-ingress"></span> Ingress / Gateway</div>
+        <div class="legend-item"><span class="legend-badge type-service"></span> Microservice Pod</div>
+        <div class="legend-item"><span class="legend-badge type-database"></span> Storage / Database</div>
+        <div class="legend-item"><span class="legend-badge type-kafka"></span> Message Broker (Kafka)</div>
+        <div class="legend-item"><span class="legend-badge type-external"></span> External 3rd Party API</div>
+        <div class="legend-divider"></div>
+        <div class="legend-item"><span class="legend-dot status-healthy"></span> Healthy (&lt; 1% err)</div>
+        <div class="legend-item"><span class="legend-dot status-degraded"></span> Degraded (High RTT)</div>
+        <div class="legend-item"><span class="legend-dot status-failing"></span> Failing (&gt; 5% err)</div>
+      </div>
+    </div>
+
+    <!-- Inspector Drawer (Right Panel) -->
+    <aside class="inspector-drawer" id="inspectorDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title-group">
+          <div class="drawer-badge" id="drawerType">SERVICE</div>
+          <h2 class="drawer-title" id="drawerName">service-name</h2>
+          <span class="drawer-ns" id="drawerNs">namespace: default</span>
+        </div>
+        <button id="btnCloseDrawer" class="btn-close" title="Close inspector">✕</button>
+      </div>
+
+      <div class="drawer-content">
+        <!-- Live Status Banner -->
+        <div class="drawer-status-card" id="drawerStatusCard">
+          <div class="status-icon" id="drawerStatusIcon">●</div>
+          <div class="status-info">
+            <div class="status-title" id="drawerStatusTitle">HEALTHY</div>
+            <div class="status-desc" id="drawerStatusDesc">Operating within defined latency and error SLOs</div>
+          </div>
+        </div>
+
+        <!-- Golden Signals Metric Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-val" id="metricRps">0 req/s</div>
+            <div class="metric-lbl">Request Rate</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val" id="metricP95">0.0 ms</div>
+            <div class="metric-lbl">Latency (P95)</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val" id="metricErrors">0.0%</div>
+            <div class="metric-lbl">Error Rate</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val" id="metricThroughput">0 KB/s</div>
+            <div class="metric-lbl">Throughput</div>
+          </div>
+        </div>
+
+        <!-- Workload Metadata -->
+        <div class="section-title">Workload Metadata (eBPF Kernel Info)</div>
+        <div class="meta-table">
+          <div class="meta-row"><span class="meta-key">Workload Kind:</span><span class="meta-val" id="metaKind">Deployment</span></div>
+          <div class="meta-row"><span class="meta-key">Pod Cluster IP:</span><span class="meta-val font-mono" id="metaIp">10.244.1.35</span></div>
+          <div class="meta-row"><span class="meta-key">NetNS Inode:</span><span class="meta-val font-mono" id="metaNetns">4026532840</span></div>
+          <div class="meta-row"><span class="meta-key">Container Runtime:</span><span class="meta-val font-mono">containerd://1.7.12</span></div>
+        </div>
+
+        <!-- Inbound Dependencies -->
+        <div class="section-title">Inbound Callers (Upstream)</div>
+        <div class="dep-list" id="inboundList">
+          <div class="empty-state">No incoming connections</div>
+        </div>
+
+        <!-- Outbound Dependencies -->
+        <div class="section-title">Outbound Dependencies (Downstream)</div>
+        <div class="dep-list" id="outboundList">
+          <div class="empty-state">No outgoing connections</div>
+        </div>
+
+        <!-- Blast Radius Trigger -->
+        <div class="blast-radius-section">
+          <div class="section-title">Failure Impact Assessment</div>
+          <p class="blast-desc">Calculates the transitive blast radius if this service experiences a hard failure or severe network degradation.</p>
+          <button id="btnComputeBlast" class="btn btn-danger btn-block">
+            <span>💥</span> Analyze Upstream Blast Radius
+          </button>
+          <div id="blastResultPanel" class="blast-results-card hidden">
+            <div class="blast-header">
+              <span class="blast-badge" id="blastSeverity">CRITICAL</span>
+              <span class="blast-count" id="blastCount">3 Services Affected</span>
+            </div>
+            <div class="blast-paths" id="blastPathsList"></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Time-Travel Historical Scrubber Footer -->
+  <footer class="app-footer">
+    <div class="scrubber-controls">
+      <button id="btnPlayHistory" class="scrubber-btn" title="Play historical snapshots">▶</button>
+      <div class="timeline-container">
+        <input type="range" id="timeSlider" min="0" max="100" value="100" class="time-range" />
+        <div class="timeline-labels">
+          <span id="timeStart">Earliest Snapshot</span>
+          <span id="timeCurrent" class="active-time">LIVE (NOW)</span>
+          <span id="timeEnd">Latest</span>
+        </div>
+      </div>
+      <div class="time-badge" id="liveBadge">LIVE MODE</div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

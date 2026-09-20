@@ -1,0 +1,22 @@
+{
+  "name": "flowcartographer",
+  "version": "1.0.0",
+  "description": "eBPF-Based Service Dependency Topology Map Generator for Kubernetes",
+  "main": "server/index.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node test/test_flowcartographer.mjs"
+  },
+  "keywords": [
+    "ebpf",
+    "kubernetes",
+    "service-map",
+    "network-topology",
+    "observability",
+    "d3",
+    "blast-radius"
+  ],
+  "author": "FlowCartographer Core Contributors",
+  "license": "Apache-2.0"
+}
