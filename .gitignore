@@ -12,3 +12,9 @@ bpf/*.bpf.o
 # Build artifacts
 dist/
 build/
+
+# Vercel
+.vercel/
+
+# Go build output
+agent/agent

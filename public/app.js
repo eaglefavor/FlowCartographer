@@ -215,9 +215,14 @@ class FlowVisualizer {
     this.updateTransform();
   }
 
-  // Connect to live Server-Sent Events stream from FlowCartographer server
+  // Connect to live Server-Sent Events stream from FlowCartographer server.
+  // Serverless platforms (Vercel included) terminate a streaming response when the
+  // function hits its max duration, so a dropped EventSource is expected there: the
+  // client transparently degrades to polling /api/v1/topology instead of going dark.
   initEventSource() {
-    const evtSource = new EventSource('/api/v1/stream');
+    this.pollTimer = null;
+    this.evtSource = new EventSource('/api/v1/stream');
+    const evtSource = this.evtSource;
 
     evtSource.onmessage = (event) => {
       try {
@@ -239,14 +244,54 @@ class FlowVisualizer {
     };
 
     evtSource.onerror = () => {
-      document.getElementById('streamStatus').innerText = 'OFFLINE • RECONNECTING...';
-      document.getElementById('streamStatus').style.color = 'var(--color-amber)';
+      this.setStreamStatus('OFFLINE • RECONNECTING...', 'var(--color-amber)');
+      this.startPollingFallback();
     };
 
     evtSource.onopen = () => {
-      document.getElementById('streamStatus').innerText = 'LIVE • SSE KERNEL STREAM';
-      document.getElementById('streamStatus').style.color = 'var(--color-emerald)';
+      this.stopPollingFallback();
+      this.setStreamStatus('LIVE • SSE KERNEL STREAM', 'var(--color-emerald)');
     };
+  }
+
+  setStreamStatus(text, color) {
+    const el = document.getElementById('streamStatus');
+    if (!el) return;
+    el.innerText = text;
+    el.style.color = color;
+  }
+
+  // Fallback transport for environments where a persistent SSE response is not allowed
+  startPollingFallback() {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => this.pollTopology(), 2000);
+    this.pollTopology();
+  }
+
+  stopPollingFallback() {
+    if (!this.pollTimer) return;
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  async pollTopology() {
+    try {
+      const resp = await fetch('/api/v1/topology');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      if (this.isLiveMode) {
+        this.syncGraphData(data.nodes, data.edges);
+        this.updateMetrics(data.nodes, data.edges);
+        if (Boolean(data.anomalyActive) !== this.anomalyActive) {
+          this.updateAnomalyState(data.anomalyActive, data.anomalyNodeId);
+        }
+      }
+      this.setStreamStatus('LIVE • POLLING SNAPSHOT', 'var(--color-emerald)');
+    } catch (err) {
+      console.error('Topology poll failed:', err);
+      this.setStreamStatus('OFFLINE • RECONNECTING...', 'var(--color-amber)');
+    }
   }
 
   updateAnomalyState(active, targetNodeId) {

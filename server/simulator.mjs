@@ -57,9 +57,20 @@ export class ClusterSimulator {
     this.running = true;
     this.seed();
 
+    // Warm the graph synchronously so the very first API response already contains a
+    // fully connected topology. This matters on serverless runtimes where a cold
+    // instance has not had time to run the interval yet.
+    this.warmup(12);
+
     this.intervalId = setInterval(() => {
       this.step();
     }, 400);
+  }
+
+  warmup(steps = 12) {
+    for (let i = 0; i < steps; i++) {
+      this.step();
+    }
   }
 
   stop() {

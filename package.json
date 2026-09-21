@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.mjs",
-    "test": "node test/test_flowcartographer.mjs"
+    "test": "node test/test_flowcartographer.mjs && node test/test_vercel_functions.mjs",
+    "dev": "node server/index.mjs",
+    "vercel-build": "echo \"no build step required\""
   },
   "keywords": [
     "ebpf",
@@ -18,5 +20,8 @@
     "blast-radius"
   ],
   "author": "FlowCartographer Core Contributors",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.5.0"
+  }
 }
