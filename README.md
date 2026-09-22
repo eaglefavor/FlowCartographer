@@ -86,13 +86,19 @@ FlowCartographer/
 │   ├── bpf_loader.go        # Kernel BPF loader and simulation generator
 │   ├── config.go            # Agent configuration options
 │   ├── types.go             # Structs and event definitions
+│   ├── go.mod               # Go module definition (run `go mod tidy` to generate go.sum)
 │   └── agent_test.go        # Unit tests
 ├── server/                  # Aggregator, Topology Engine & Storage Layer
-│   ├── index.mjs            # Server entrypoint (HTTP, SSE, GraphQL, REST)
+│   ├── index.mjs            # Standalone HTTP server entrypoint (npm start)
+│   ├── app.mjs              # Application core: graph bootstrap + request handler
 │   ├── graph_engine.mjs     # Directed Graph Engine & Blast Radius Traverser
-│   ├── db.mjs               # SQLite Persistent storage for snapshots
+│   ├── db.mjs               # SQLite storage (auto-falls back to in-memory)
 │   ├── simulator.mjs        # Microservices flow generator & anomaly injector
 │   └── graphql_handler.mjs  # GraphQL schema and query resolver
+├── api/                     # Vercel (serverless) entrypoints -> server/app.mjs
+│   ├── v1/[...path].mjs     # Catch-all for the whole /api/v1 surface
+│   ├── graphql.mjs          # POST /graphql (rewritten from /api/graphql)
+│   └── metrics.mjs          # GET /metrics (rewritten from /api/metrics)
 ├── public/                  # Modern Web Visualization Dashboard
 │   ├── index.html           # Dashboard HTML5 layout
 │   ├── style.css            # Dark cyberpunk cloud-native theme
@@ -103,7 +109,9 @@ FlowCartographer/
 │   ├── rbac.yaml            # RBAC ClusterRole and Bindings
 │   └── helm/                # Helm deployment package
 ├── test/                    # Test Suites
-│   └── test_flowcartographer.mjs
+│   ├── test_flowcartographer.mjs   # Graph engine, persistence, GraphQL, anomalies
+│   └── test_vercel_functions.mjs   # Serverless entrypoint / deployment checks
+├── vercel.json              # Vercel deployment config (functions + static + rewrites)
 └── package.json
 ```
 
@@ -123,7 +131,46 @@ Open your browser at `http://localhost:8080` to view the interactive live servic
 npm test
 ```
 
-### 3. Deploy to Kubernetes
+### 3. Deploy to Vercel (dashboard + API)
+
+The web dashboard and the aggregator API run as Node.js Serverless Functions; the eBPF
+agent is **not** deployed there (see the note below).
+
+1. In the Vercel project, open **Settings → General → Root Directory** and set it to the
+   **repository root** (`.`). If it points at `agent/`, Vercel tries to compile the Go
+   eBPF agent as a serverless function and the build fails.
+2. Import the repository (Framework Preset: **Other**) and deploy. `vercel.json` wires
+   everything up: `public/` is served statically and `api/**` becomes serverless
+   functions. The Node.js runtime version is pinned to 22.x by `engines.node` in
+   `package.json` — do **not** set `functions.runtime` in `vercel.json`; Vercel only
+   accepts a `name@semver` package specifier there and rejects values like `nodejs22.x`
+   with *"Function Runtimes must have a valid version"*.
+3. Verify: `/`, `/api/v1/topology`, `/graphql` and `/metrics`.
+
+```bash
+# Local preview of exactly what Vercel builds
+npm run vercel-build   # no-op: the app needs no build step
+npm test               # includes the serverless entrypoint suite
+```
+
+Serverless notes:
+
+* The filesystem is read-only and ephemeral, so snapshots are kept in memory for the
+  lifetime of a warm instance. Set `DATABASE_PATH` to a writable location if you want
+  SQLite persistence instead.
+* Each warm function instance runs its own graph/simulator; the built-in demo traffic is
+  generated in-process, so a cold start re-seeds the topology.
+* Long-lived SSE responses are cut off at the function timeout, so the dashboard
+  automatically falls back to polling `/api/v1/topology` when the stream drops.
+
+> **The eBPF agent does not run on Vercel.** `agent/` needs a privileged Linux kernel,
+> `CAP_BPF`/`CAP_SYS_ADMIN`, and access to the cluster API, so it is deployed as a
+> Kubernetes DaemonSet (`deploy/daemonset.yaml`). Build it with
+> `cd agent && go mod tidy && go build -o agent .` — `go mod tidy` generates the
+> `go.sum` lockfile on the first run, which is required for any `go build` (including CI
+> and container images).
+
+### 4. Deploy to Kubernetes
 ```bash
 # Apply RBAC and Service Accounts
 kubectl apply -f deploy/rbac.yaml
