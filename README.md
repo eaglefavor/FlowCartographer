@@ -140,7 +140,11 @@ agent is **not** deployed there (see the note below).
    **repository root** (`.`). If it points at `agent/`, Vercel tries to compile the Go
    eBPF agent as a serverless function and the build fails.
 2. Import the repository (Framework Preset: **Other**) and deploy. `vercel.json` wires
-   everything up: `public/` is served statically and `api/**` becomes Node 22 functions.
+   everything up: `public/` is served statically and `api/**` becomes serverless
+   functions. The Node.js runtime version is pinned to 22.x by `engines.node` in
+   `package.json` — do **not** set `functions.runtime` in `vercel.json`; Vercel only
+   accepts a `name@semver` package specifier there and rejects values like `nodejs22.x`
+   with *"Function Runtimes must have a valid version"*.
 3. Verify: `/`, `/api/v1/topology`, `/graphql` and `/metrics`.
 
 ```bash
